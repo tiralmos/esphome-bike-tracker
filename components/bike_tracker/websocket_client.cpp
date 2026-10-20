@@ -10,9 +10,9 @@
 #endif
 
 namespace esphome {
-namespace transit_tracker {
+namespace bike_tracker {
 
-static const char *const TAG = "transit_tracker.ws";
+static const char *const TAG = "bike_tracker.ws";
 
 static const char *error_type_to_string(esp_websocket_error_type_t t) {
   switch (t) {
@@ -207,5 +207,5 @@ void WebSocketClient::handle_data_(const esp_websocket_event_data_t *data) {
   }
 }
 
-}  // namespace transit_tracker
+}  // namespace bike_tracker
 }  // namespace esphome

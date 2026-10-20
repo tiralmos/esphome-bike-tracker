@@ -8,21 +8,14 @@
 #include "esphome/core/component.h"
 #include "esphome/components/display/display.h"
 #include "esphome/components/font/font.h"
-#include "esphome/components/time/real_time_clock.h"
 
-#include "schedule_state.h"
-#include "localization.h"
+#include "station_state.h"
 #include "websocket_client.h"
 
 namespace esphome {
-namespace transit_tracker {
+namespace bike_tracker {
 
-struct RouteStyle {
-  std::string name;
-  Color color;
-};
-
-class TransitTracker : public Component {
+class BikeTracker : public Component {
   public:
     void setup() override;
     void loop() override;
@@ -35,54 +28,47 @@ class TransitTracker : public Component {
     void reconnect(const char *reason);
     void close(bool fully = false);
 
-    void draw_schedule();
-
-    Localization* get_localization() { return &this->localization_; }
+    void draw_stations();
 
     void set_display(display::Display *display) { display_ = display; }
     void set_font(font::Font *font) { font_ = font; }
-    void set_rtc(time::RealTimeClock *rtc) { rtc_ = rtc; }
 
     void set_base_url(const std::string &base_url) { base_url_ = base_url; }
     void set_feed_code(const std::string &feed_code) { feed_code_ = feed_code; }
-    void set_display_departure_times(bool display_departure_times) { display_departure_times_ = display_departure_times; }
-    void set_schedule_string(const std::string &schedule_string) { schedule_string_ = schedule_string; }
-    void set_list_mode(const std::string &list_mode) { list_mode_ = list_mode; }
+    void set_stations_string(const std::string &stations_string) { stations_string_ = stations_string; }
     void set_limit(int limit) { limit_ = limit; }
-    void set_scroll_headsigns(bool scroll_headsigns) { scroll_headsigns_ = scroll_headsigns; }
+    void set_scroll_station_names(bool scroll_station_names) { scroll_station_names_ = scroll_station_names; }
 
     void set_header_text(const std::string &header_text) { header_text_ = header_text; }
-    void set_unit_display(UnitDisplay unit_display) { this->localization_.set_unit_display(unit_display); }
     void add_abbreviation(const std::string &from, const std::string &to) { abbreviations_[from] = to; }
+    void add_station_name(const std::string &station_id, const std::string &name) { station_names_[station_id] = name; }
     void add_header(const std::string &name, const std::string &value) { extra_headers_.emplace_back(name, value); }
-    void set_default_route_color(const Color &color) { default_route_color_ = color; }
-    void add_route_style(const std::string &route_id, const std::string &name, const Color &color) { route_styles_[route_id] = RouteStyle{name, color}; }
+
+    void set_docks_color(const Color &color) { docks_color_ = color; }
+    void set_mechanical_color(const Color &color) { mechanical_color_ = color; }
+    void set_electric_color(const Color &color) { electric_color_ = color; }
 
     void set_abbreviations_from_text(const std::string &text);
-    void set_route_styles_from_text(const std::string &text);
-
-    void set_realtime_color(const Color &color);
+    void set_station_names_from_text(const std::string &text);
 
   protected:
     static constexpr int scroll_speed = 10; // pixels/second
     static constexpr int idle_time_left = 5000;
     static constexpr int idle_time_right = 1000;
 
-    std::string from_now_(time_t unix_timestamp, uint rtc_now) const;
     void draw_text_centered_(const char *text, Color color);
-    void draw_realtime_icon_(int bottom_right_x, int bottom_right_y, unsigned long now);
+    void draw_icon_(const char *const *rows, int left_x, int bottom_y, Color color, Color accent_color);
+    std::string display_name_(const Station &station) const;
 
-    void draw_trip(
-      const Trip &trip, int y_offset, int font_height, unsigned long uptime, uint rtc_now,
-      bool no_draw = false, int *headsign_overflow_out = nullptr, int scroll_cycle_duration = 0
+    void draw_station_(
+      const Station &station, int y_offset, unsigned long uptime,
+      bool no_draw = false, int *name_overflow_out = nullptr, int scroll_cycle_duration = 0
     );
 
-    Localization localization_{};
-    ScheduleState schedule_state_;
+    StationState station_state_;
 
     display::Display *display_;
     font::Font *font_;
-    time::RealTimeClock *rtc_;
 
     WebSocketClient ws_client_;
 
@@ -99,21 +85,22 @@ class TransitTracker : public Component {
     std::string base_url_;
     std::vector<std::pair<std::string, std::string>> extra_headers_;
     std::string feed_code_;
-    std::string schedule_string_;
-    std::string list_mode_;
-    bool display_departure_times_ = true;
+    std::string stations_string_;
     int limit_;
 
     std::string header_text_;
     std::map<std::string, std::string> abbreviations_;
-    Color default_route_color_ = Color(0x028e51);
-    std::map<std::string, RouteStyle> route_styles_;
-    bool scroll_headsigns_ = false;
+    std::map<std::string, std::string> station_names_;
+    bool scroll_station_names_ = true;
 
-    Color realtime_color_ = Color(0x20FF00);
-    Color realtime_color_dark_ = Color(0x00A700);
+    Color docks_color_ = Color(0x2ECC40);
+    Color mechanical_color_ = Color(0xE2001A);
+    Color electric_color_ = Color(0x00A8FF);
+    Color bolt_color_ = Color(0xFFD200);
+    Color count_color_ = Color(0xFFFFFF);
+    Color unavailable_color_ = Color(0x404040);
 };
 
 
-}  // namespace transit_tracker
+}  // namespace bike_tracker
 }  // namespace esphome

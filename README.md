@@ -1,119 +1,74 @@
-# ESPHome Transit Tracker Component
+# ESPHome Bike Tracker Component
 
-This is an external component for [ESPHome](https://esphome.io/) that fetches and renders a live arrivals board for any transit agency supported by the [Transit Tracker API](https://github.com/tjhorner/transit-tracker-api).
+An external component for [ESPHome](https://esphome.io/) that shows live bike-share availability on an LED matrix: for each station, its name, then the number of free docks, mechanical bikes and electric bikes, each with a small pixel-art icon.
 
-This component is used by the [Transit Tracker](https://transit-tracker.eastsideurbanism.org/) project. Check it out if you want to build your own!
+```
+ROUVILLE   [P] 5   [bike] 0   [e-bike] 11
+```
 
-## Note
-
-Though this can technically work with any display supported by ESPHome, it is optimized for and tested with a 128x64 LED matrix display.
+It is a fork of [esphome-transit-tracker](https://github.com/tjhorner/esphome-transit-tracker), adapted for the Lyon Vélo'v system, and gets its data from [Bike Tracker API](https://github.com/tiralmos/bike-tracker-api), which reads any GBFS bike-share feed. It is optimized for the 128x32 display of the [Transit Tracker](https://transit-tracker.eastsideurbanism.org/) hardware.
 
 ## Usage
 
-Check out the `examples` directory for a full example configuration.
-
-You can use this component in your ESPHome configuration by importing it with `external_components`:
+The complete firmware, with Wi-Fi setup and configuration from the [configurator](https://github.com/tiralmos/bike-tracker-configurator), lives in [tiralmos/bike-tracker](https://github.com/tiralmos/bike-tracker). To use the component in your own ESPHome configuration, import it with `external_components`:
 
 ```yaml
 external_components:
-  - source: github://tjhorner/esphome-transit-tracker
-    components: [transit_tracker]
+  - source:
+      type: git
+      url: https://github.com/tiralmos/esphome-bike-tracker
+      ref: main
+    components: [bike_tracker]
 ```
 
-You will need these components in your configuration:
-
-- [Display](https://esphome.io/components/display/)
-- [Font](https://esphome.io/components/font/)
-- [Time](https://esphome.io/components/time/)
-
-Then you can define an instance of the component in your YAML configuration. The easiest way to generate the configuration is with the [configurator tool](https://transit-tracker.eastsideurbanism.org/configurator). Once you've set the options you want, press "Generate YAML" at the bottom and paste the generated text into your configuration.
-
-Here is is a complete example; most parameters are optional:
+You will need a [display](https://esphome.io/components/display/) and a [font](https://esphome.io/components/font/). The configurator's "Generate YAML" button writes the `bike_tracker` block for you. All options:
 
 ```yaml
-transit_tracker:
+bike_tracker:
   id: tracker
 
-  # Base URL of the Transit Tracker API
-  base_url: "wss://tt.horner.tj/"
+  # WebSocket URL of your Bike Tracker API
+  base_url: "ws://192.168.1.10:3000/"
 
   # Additional headers to send in the HTTP request
   headers:
     - name: "X-Hello"
       value: "world"
 
-  # The feed code of the transit agency you want to track (optional)
-  feed_code: "st"
-
-  # Maximum number of arrivals to show
+  # Maximum number of rows on the display (header text takes one)
   limit: 3
 
-  # Whether to display arrival or departure times
-  time_display: departure # or "arrival"
+  # Scroll station names that don't fit next to the counts
+  scroll_station_names: true
 
-  # How to list trips:
-  #   sequential: All trips across all routes in order of arrival/departure
-  #   nextPerRoute: Each route's next trip in order of arrival/departure
-  list_mode: sequential
-
-  # Default color for route names
-  # (See https://esphome.io/components/display/#color)
-  default_route_color: my_favorite_color
-
-  # Color for real-time indicator icon and text
-  realtime_color: my_second_favorite_color
-
-  # How to display the duration units.
-  # Examples:
-  #   long  = "5min" / "1h15m"
-  #   short = "5m"   / "1h15m"
-  #   none  = "5"    / "1:15"
-  show_units: long
-
-  # If true, headsign text will scroll if it doesn't fit
-  scroll_headsigns: false
-
-  # List of stop and route IDs to track
-  stops:
-    - stop_id: "1_71971"
-      # If it takes you a known amount of time to walk to the
-      # stop, you can set a time offset here so that the time
-      # displayed on the board is more like a "leave by" time
-      time_offset: -8min # e.g., if it takes you 8 minutes to walk to the stop
-      routes:
-        - "1_100113"
-        - "1_102704"
-    - stop_id: "1_71961"
-      time_offset: -10min
-      routes:
-        - "1_102548"
+  # Stations to show, top to bottom
+  stations:
+    - station_id: "velov:1024"
+    - station_id: "velov:7024"
+      # Shown instead of the station's own name
+      name: "Home"
 
   # Add a static string to the top of the display
-  header_text: "Upcoming Departures"
+  header_text: "Velo'v"
 
-  # List of custom styles for route names and colors
-  styles:
-    - route_id: "1_102548"
-      name: "B"
-      # See https://esphome.io/components/display/#color
-      color: rapidride_red
-
-  # List of custom abbreviations for headsigns
+  # Shorten station names
   abbreviations:
-    - from: "Bellevue Transit Center Crossroads"
-      to: "Bellevue TC"
-    - from: "Transit Center"
-      to: "TC"
+    - from: "PART-DIEU"
+      to: "P-DIEU"
+
+  # Icon colors (see https://esphome.io/components/display/#color)
+  docks_color: my_green
+  mechanical_color: my_red
+  electric_color: my_blue
 ```
 
-Then, finally, in your display's draw lambda:
+Then, in your display's draw lambda:
 
 ```yaml
 display:
   - platform: # ...
-    id: # ...
     lambda: |-
-      id(tracker).draw_schedule();
+      id(tracker).draw_stations();
 ```
 
 ## License
