@@ -7,7 +7,7 @@
 #include "esp_websocket_client.h"
 
 namespace esphome {
-namespace transit_tracker {
+namespace bike_tracker {
 
 class WebSocketClient {
  public:
@@ -55,5 +55,5 @@ class WebSocketClient {
   std::string message_buffer_;
 };
 
-}  // namespace transit_tracker
+}  // namespace bike_tracker
 }  // namespace esphome
