@@ -93,9 +93,9 @@ class BikeTracker : public Component {
     std::map<std::string, std::string> station_names_;
     bool scroll_station_names_ = true;
 
-    Color docks_color_ = Color(0x2ECC40);
+    Color docks_color_ = Color(0x9A9A9A);
     Color mechanical_color_ = Color(0xE2001A);
-    Color electric_color_ = Color(0x00A8FF);
+    Color electric_color_ = Color(0x2ECC40);
     Color bolt_color_ = Color(0xFFD200);
     Color count_color_ = Color(0xFFFFFF);
     Color unavailable_color_ = Color(0x404040);

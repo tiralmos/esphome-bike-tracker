@@ -53,8 +53,8 @@ bike_tracker:
 
   # Shorten station names
   abbreviations:
-    - from: "PART-DIEU"
-      to: "P-DIEU"
+    - from: "Part-Dieu"
+      to: "P-Dieu"
 
   # Icon colors (see https://esphome.io/components/display/#color)
   docks_color: my_green
