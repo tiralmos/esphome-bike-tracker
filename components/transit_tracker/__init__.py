@@ -27,6 +27,9 @@ UNIT_DISPLAY_VALUES = {
 }
 
 CONF_ROWS = "rows"
+CONF_TIME_SLOTS = "time_slots"
+CONF_FROM = "from"
+CONF_TO = "to"
 CONF_ROUTE_ID = "route_id"
 CONF_STOP_ID = "stop_id"
 CONF_STATION_ID = "station_id"
@@ -93,6 +96,45 @@ def validate_row(value):
     )(value)
 
 
+def validate_clock_time(value):
+    """A local time of day, "HH:MM" (24:00 allowed as the end of the day)."""
+    value = cv.string(value).strip()
+    parts = value.split(":")
+    if len(parts) != 2 or not all(p.isdigit() and len(p) == 2 for p in parts):
+        raise cv.Invalid(f"Expected a time like 07:30, got {value!r}")
+    hours, minutes = int(parts[0]), int(parts[1])
+    if hours > 24 or minutes > 59 or (hours == 24 and minutes != 0):
+        raise cv.Invalid(f"Not a valid time of day: {value!r}")
+    return (hours * 60 + minutes) % (24 * 60)
+
+
+def _slot_minutes(slot):
+    """The minutes of the day a slot covers."""
+    start, end = slot[CONF_FROM], slot[CONF_TO]
+    if start == end:
+        return set(range(24 * 60))
+    if start < end:
+        return set(range(start, end))
+    return set(range(start, 24 * 60)) | set(range(0, end))
+
+
+def validate_time_slots(slots):
+    for i, slot in enumerate(slots):
+        for other in slots[i + 1:]:
+            if _slot_minutes(slot) & _slot_minutes(other):
+                raise cv.Invalid("Time slots must not overlap")
+    return slots
+
+
+TIME_SLOT_SCHEMA = cv.Schema(
+    {
+        cv.Required(CONF_FROM): validate_clock_time,
+        cv.Required(CONF_TO): validate_clock_time,
+        cv.Required(CONF_ROWS): cv.ensure_list(validate_row),
+    }
+)
+
+
 def _consume_transit_tracker_sockets(config: ConfigType) -> ConfigType:
     """Register socket needs for transit_tracker component."""
     from esphome.components import socket
@@ -123,7 +165,12 @@ CONFIG_SCHEMA = cv.All(
             ),
             cv.Optional(CONF_SHOW_UNITS, default="long"): cv.enum(UNIT_DISPLAY_VALUES),
             cv.Optional(CONF_SCROLL_NAMES, default=True): cv.boolean,
+            # Shown when no time slot is active
             cv.Optional(CONF_ROWS, default=[]): cv.ensure_list(validate_row),
+            # Rows shown only between two times of the day
+            cv.Optional(CONF_TIME_SLOTS, default=[]): cv.All(
+                cv.ensure_list(TIME_SLOT_SCHEMA), validate_time_slots
+            ),
             cv.Optional(CONF_HEADER_TEXT, default=""): cv.string,
             cv.Optional(CONF_DEFAULT_ROUTE_COLOR): COLOR_SCHEMA,
             cv.Optional(CONF_REALTIME_COLOR): COLOR_SCHEMA,
@@ -167,16 +214,24 @@ def _row_id(row):
     return f"{row[CONF_ROUTE_ID]},{row[CONF_STOP_ID]}"
 
 
-def _rows_text(rows):
+def _rows_text(rows, time_slots=()):
     """Rows in the same text format as the rows setting on the device."""
     lines = []
     for row in rows:
-        if CONF_STATION_ID in row:
-            lines.append(f"b;{row[CONF_STATION_ID]}")
-        else:
-            offset = row[CONF_TIME_OFFSET].total_seconds
-            lines.append(f"t;{row[CONF_ROUTE_ID]},{row[CONF_STOP_ID]},{int(offset)}")
+        lines.append(_row_line(row))
+    for slot in time_slots:
+        start, end = slot[CONF_FROM], slot[CONF_TO]
+        lines.append(f"s;{start // 60:02d}{start % 60:02d}-{end // 60:02d}{end % 60:02d}")
+        for row in slot[CONF_ROWS]:
+            lines.append(_row_line(row))
     return "\n".join(lines)
+
+
+def _row_line(row):
+    if CONF_STATION_ID in row:
+        return f"b;{row[CONF_STATION_ID]}"
+    offset = row[CONF_TIME_OFFSET].total_seconds
+    return f"t;{row[CONF_ROUTE_ID]},{row[CONF_STOP_ID]},{int(offset)}"
 
 
 async def to_code(config):
@@ -196,10 +251,13 @@ async def to_code(config):
 
     cg.add(var.set_feed_code(config[CONF_FEED_CODE]))
 
-    if config[CONF_ROWS]:
-        cg.add(var.set_rows_from_text(_rows_text(config[CONF_ROWS])))
+    if config[CONF_ROWS] or config[CONF_TIME_SLOTS]:
+        cg.add(var.set_rows_from_text(_rows_text(config[CONF_ROWS], config[CONF_TIME_SLOTS])))
 
-    for row in config[CONF_ROWS]:
+    all_rows = list(config[CONF_ROWS])
+    for slot in config[CONF_TIME_SLOTS]:
+        all_rows.extend(slot[CONF_ROWS])
+    for row in all_rows:
         if CONF_NAME in row:
             cg.add(var.add_row_name(_row_id(row), row[CONF_NAME]))
 

@@ -1,6 +1,7 @@
 #include "transit_tracker.h"
 #include "string_utils.h"
 
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 #include <strings.h>
@@ -61,6 +62,19 @@ static const char *const EBIKE_ICON[] = {
   "+..#..#.#.#..#",
   "...#..#...#..#",
   "....##.....##.",
+  nullptr,
+};
+
+// Shown on the left of each bike row, like the line badge of a transit row.
+// '#' is the badge color, '+' the letter.
+static const char *const BIKE_BADGE_ICON[] = {
+  ".#######.",
+  "#+#####+#",
+  "#+#####+#",
+  "##+###+##",
+  "##+###+##",
+  "###+#+###",
+  ".###+###.",
   nullptr,
 };
 
@@ -168,6 +182,10 @@ void TransitTracker::setup() {
 }
 
 void TransitTracker::loop() {
+  if (millis() - this->last_slot_check_ >= 1000) {
+    this->update_active_slot_();
+  }
+
   if (this->pending_subscribe_.exchange(false)) {
     this->status_clear_error();
     this->send_subscribe_();
@@ -184,9 +202,16 @@ void TransitTracker::loop() {
 void TransitTracker::dump_config() {
   ESP_LOGCONFIG(TAG, "Transit Tracker:");
   ESP_LOGCONFIG(TAG, "  Base URL: %s", this->base_url_.c_str());
-  ESP_LOGCONFIG(TAG, "  Rows: %u", static_cast<unsigned>(this->rows_.size()));
-  for (const auto &row : this->rows_) {
-    ESP_LOGCONFIG(TAG, "    %s %s", row.type == RowType::TRANSIT ? "transit" : "bike", row.id.c_str());
+  for (const auto &slot : this->slots_) {
+    if (slot.is_default) {
+      ESP_LOGCONFIG(TAG, "  Default rows: %u", static_cast<unsigned>(slot.rows.size()));
+    } else {
+      ESP_LOGCONFIG(TAG, "  Rows from %02d:%02d to %02d:%02d: %u", slot.start_minute / 60, slot.start_minute % 60,
+                    slot.end_minute / 60, slot.end_minute % 60, static_cast<unsigned>(slot.rows.size()));
+    }
+    for (const auto &row : slot.rows) {
+      ESP_LOGCONFIG(TAG, "    %s %s", row.type == RowType::TRANSIT ? "transit" : "bike", row.id.c_str());
+    }
   }
   ESP_LOGCONFIG(TAG, "  Limit: %d", this->limit_);
   ESP_LOGCONFIG(TAG, "  Scroll names: %s", this->scroll_names_ ? "true" : "false");
@@ -422,13 +447,38 @@ void TransitTracker::handle_message_(const std::string &payload) {
   }
 }
 
+// Parses "HHMM-HHMM" into minutes since midnight
+static bool parse_slot_times(const std::string &text, int &start, int &end) {
+  auto times = split(text, '-');
+  if (times.size() != 2) {
+    return false;
+  }
+  int values[2];
+  for (int i = 0; i < 2; i++) {
+    auto t = trim(times[i]);
+    if (t.size() != 4 || t.find_first_not_of("0123456789") != std::string::npos) {
+      return false;
+    }
+    int hours = atoi(t.substr(0, 2).c_str());
+    int minutes = atoi(t.substr(2, 2).c_str());
+    if (hours > 24 || minutes > 59 || (hours == 24 && minutes != 0)) {
+      return false;
+    }
+    values[i] = (hours * 60 + minutes) % (24 * 60);
+  }
+  start = values[0];
+  end = values[1];
+  return true;
+}
+
 void TransitTracker::set_rows_from_text(const std::string &text) {
   if (text == this->rows_text_) {
     return;
   }
   this->rows_text_ = text;
 
-  std::vector<Row> rows;
+  // slots[0] is the default slot; each "s;" line starts a new one
+  std::vector<TimeSlot> slots(1);
   for (const auto &raw_line : split(text, '\n')) {
     auto line = trim(raw_line);
     if (line.empty()) {
@@ -441,11 +491,20 @@ void TransitTracker::set_rows_from_text(const std::string &text) {
       continue;
     }
 
-    if (parts[0] == "b") {
+    if (parts[0] == "s") {
+      TimeSlot slot;
+      slot.is_default = false;
+      if (!parse_slot_times(parts[1], slot.start_minute, slot.end_minute)) {
+        ESP_LOGW(TAG, "Invalid time slot (expected s;HHMM-HHMM): %s", line.c_str());
+        // Keep its rows out of the previous slot
+        slot.start_minute = slot.end_minute = -1;
+      }
+      slots.push_back(slot);
+    } else if (parts[0] == "b") {
       Row row;
       row.type = RowType::BIKE;
       row.id = trim(parts[1]);
-      rows.push_back(row);
+      slots.back().rows.push_back(row);
     } else if (parts[0] == "t") {
       auto fields = split(parts[1], ',');
       if (fields.size() < 2 || fields.size() > 3 || fields[0].empty() || fields[1].empty()) {
@@ -458,15 +517,58 @@ void TransitTracker::set_rows_from_text(const std::string &text) {
       row.stop_id = trim(fields[1]);
       row.time_offset = fields.size() == 3 ? atoi(fields[2].c_str()) : 0;
       row.id = row.route_id + "," + row.stop_id;
-      rows.push_back(row);
+      slots.back().rows.push_back(row);
     } else {
-      ESP_LOGW(TAG, "Unknown row type '%s' (expected t or b): %s", parts[0].c_str(), line.c_str());
+      ESP_LOGW(TAG, "Unknown row type '%s' (expected t, b or s): %s", parts[0].c_str(), line.c_str());
     }
   }
 
+  // Drop slots whose times could not be read
+  slots.erase(std::remove_if(slots.begin() + 1, slots.end(),
+                             [](const TimeSlot &slot) { return slot.start_minute < 0; }),
+              slots.end());
+
+  this->slots_ = std::move(slots);
+  this->update_active_slot_(true);
+}
+
+int TransitTracker::current_slot_index_() const {
+  if (this->rtc_ != nullptr) {
+    auto now = this->rtc_->now();
+    if (now.is_valid()) {
+      int minute = now.hour * 60 + now.minute;
+      for (size_t i = 1; i < this->slots_.size(); i++) {
+        if (this->slots_[i].contains(minute)) {
+          return i;
+        }
+      }
+    }
+  }
+  if (!this->slots_.empty() && !this->slots_[0].rows.empty()) {
+    return 0;
+  }
+  return -1;
+}
+
+void TransitTracker::update_active_slot_(bool force) {
+  this->last_slot_check_ = millis();
+  int index = this->current_slot_index_();
+  if (!force && index == this->active_slot_) {
+    return;
+  }
+
+  if (index != this->active_slot_) {
+    ESP_LOGI(TAG, "Showing time slot %d", index);
+  }
+  this->active_slot_ = index;
+
   {
     std::lock_guard<std::mutex> lock(this->state_.mutex);
-    this->rows_ = std::move(rows);
+    if (index >= 0) {
+      this->rows_ = this->slots_[index].rows;
+    } else {
+      this->rows_.clear();
+    }
     this->state_.trips.clear();
     this->state_.stations.clear();
     this->state_.has_schedule_update = false;
@@ -587,6 +689,13 @@ void TransitTracker::draw_icon_(const char *const *rows, int left_x, int bottom_
       }
     }
   }
+}
+
+int TransitTracker::draw_bike_badge_(int left_x, int y_offset, bool available) {
+  int bottom_y = y_offset + this->font_->get_ascender() - 1;
+  this->draw_icon_(BIKE_BADGE_ICON, left_x, bottom_y, available ? this->bike_badge_color_ : this->unavailable_color_,
+                   Color(0xFFFFFF));
+  return strlen(BIKE_BADGE_ICON[0]);
 }
 
 void HOT TransitTracker::draw_realtime_icon_(int bottom_right_x, int bottom_right_y, unsigned long uptime) {
@@ -822,13 +931,19 @@ int TransitTracker::draw_bike_row_(const Row &row, const Station *station, int y
     name = "Station not found";
   }
 
+  int badge_width = strlen(BIKE_BADGE_ICON[0]);
+  if (!no_draw) {
+    this->draw_bike_badge_(0, y_offset, is_renting || is_returning);
+  }
+  int name_start = badge_width + 3;
+
   int name_width;
   this->font_->measure(name.c_str(), &name_width, &_, &_, &_);
-  int overflow = name_width - x;
+  int overflow = name_width - (x - name_start);
 
   if (!no_draw) {
     Color name_color = is_renting || is_returning ? Color(0xFFFFFF) : this->unavailable_color_;
-    this->draw_scrolling_text_(name, name_color, 0, x, y_offset, uptime, scroll_cycle_duration);
+    this->draw_scrolling_text_(name, name_color, name_start, x, y_offset, uptime, scroll_cycle_duration);
   }
   return overflow;
 }
@@ -864,8 +979,20 @@ void HOT TransitTracker::draw_schedule() {
 
   std::lock_guard<std::mutex> lock(this->state_.mutex);
 
-  if (this->rows_.empty()) {
+  bool has_any_rows = false;
+  for (const auto &slot : this->slots_) {
+    has_any_rows = has_any_rows || !slot.rows.empty();
+  }
+  if (!has_any_rows) {
     this->draw_text_centered_("No rows configured", MESSAGE_COLOR);
+    return;
+  }
+
+  if (this->rows_.empty()) {
+    // Only time slots, and none active: wait for the clock, else stay dark
+    if (this->rtc_ == nullptr || !this->rtc_->now().is_valid()) {
+      this->draw_text_centered_("Waiting for time sync", MESSAGE_COLOR);
+    }
     return;
   }
 

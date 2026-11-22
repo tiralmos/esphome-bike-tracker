@@ -51,12 +51,14 @@ class TransitTracker : public Component {
     void set_feed_code(const std::string &feed_code) { feed_code_ = feed_code; }
 
     // One row per line: "t;routeId,stopId[,offsetSeconds]" or "b;stationId".
+    // A line "s;HHMM-HHMM" starts a time slot: the rows after it are only
+    // shown between those times (local time). Rows before the first slot
+    // line are the default, shown when no slot is active.
     // Changing the rows resubscribes when connected.
     void set_rows_from_text(const std::string &text);
     // One custom name per line: "rowId;name", where rowId is
     // "routeId,stopId" for a transit row or the station ID for a bike row.
     void set_row_names_from_text(const std::string &text);
-    void add_row(const Row &row) { rows_.push_back(row); }
     void add_row_name(const std::string &row_id, const std::string &name) { row_names_[row_id] = name; }
 
     void set_limit(int limit) { limit_ = limit; }
@@ -84,6 +86,7 @@ class TransitTracker : public Component {
 
     void draw_text_centered_(const char *text, Color color);
     void draw_icon_(const char *const *rows, int left_x, int bottom_y, Color color, Color accent_color);
+    int draw_bike_badge_(int left_x, int y_offset, bool available);
     void draw_realtime_icon_(int bottom_right_x, int bottom_right_y, unsigned long uptime);
     void draw_scrolling_text_(const std::string &text, Color color, int clip_start, int clip_end, int y_offset,
                               unsigned long uptime, int scroll_cycle_duration);
@@ -102,6 +105,11 @@ class TransitTracker : public Component {
     int draw_row_(int index, int y_offset, int font_height, unsigned long uptime, uint rtc_now, bool no_draw,
                   int scroll_cycle_duration);
     const Trip *trip_for_row_(int index, uint rtc_now) const;
+
+    // Index in slots_ of the slot to show now (-1 if none, with no default)
+    int current_slot_index_() const;
+    // Switches rows_ to the slot that is active now, resubscribing if it changed
+    void update_active_slot_(bool force = false);
 
     Localization localization_{};
     TrackerState state_;
@@ -125,7 +133,11 @@ class TransitTracker : public Component {
     std::string base_url_;
     std::vector<std::pair<std::string, std::string>> extra_headers_;
     std::string feed_code_;
+    // The rows of the active slot
     std::vector<Row> rows_;
+    std::vector<TimeSlot> slots_;
+    int active_slot_ = -1;
+    unsigned long last_slot_check_ = 0;
     std::string rows_text_;
     std::map<std::string, std::string> row_names_;
     int limit_ = 3;
@@ -145,6 +157,7 @@ class TransitTracker : public Component {
     Color bolt_color_ = Color(0xFFD200);
     Color count_color_ = Color(0xFFFFFF);
     Color unavailable_color_ = Color(0x404040);
+    Color bike_badge_color_ = Color(0xE30613);
 };
 
 }  // namespace transit_tracker
