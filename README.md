@@ -1,34 +1,39 @@
-# ESPHome Bike Tracker Component
+# ESPHome Transit Tracker Component (Lyon)
 
-An external component for [ESPHome](https://esphome.io/) that shows live bike-share availability on an LED matrix: for each station, its name, then the number of free docks, mechanical bikes and electric bikes, each with a small pixel-art icon.
+An external component for [ESPHome](https://esphome.io/) that shows Lyon's public transport on an LED matrix. Each row is either:
+
+- **a transit line at a stop**: the line's badge, its destination (or your own name for the row), the time to the next departure, and an animated icon when the time is real-time. Add the same line at the same stop twice to see the next two departures.
+- **a bike-share station**: its name, then the number of free docks, mechanical bikes and electric bikes, each with a small pixel-art icon.
 
 ```
-ROUVILLE   [P] 5   [bike] 0   [e-bike] 11
+C3  Gare St-Paul          [rt] 4min
+C3  Gare St-Paul              12min
+Bancel  [P] 5  [bike] 0  [e-bike] 11
 ```
 
-It is a fork of [esphome-transit-tracker](https://github.com/tjhorner/esphome-transit-tracker), adapted for the Lyon Vélo'v system, and gets its data from [Bike Tracker API](https://github.com/tiralmos/bike-tracker-api), which reads any GBFS bike-share feed. It is optimized for the 128x32 display of the [Transit Tracker](https://transit-tracker.eastsideurbanism.org/) hardware.
+It merges [esphome-transit-tracker](https://github.com/tjhorner/esphome-transit-tracker) with the Vélo'v bike tracker fork. It gets its data from [Transit Tracker Lyon API](https://github.com/tiralmos/transit-tracker-lyon-api), which serves TCL departures (GTFS) and Vélo'v stations (GBFS) over one WebSocket. It is optimized for the 128x32 display of the [Transit Tracker](https://transit-tracker.eastsideurbanism.org/) hardware.
 
 ## Usage
 
-The complete firmware, with Wi-Fi setup and configuration from the [configurator](https://github.com/tiralmos/bike-tracker-configurator), lives in [tiralmos/bike-tracker](https://github.com/tiralmos/bike-tracker). To use the component in your own ESPHome configuration, import it with `external_components`:
+The complete firmware, with Wi-Fi setup and configuration from the [configurator](https://github.com/tiralmos/transit-tracker-lyon-configurator), lives in [tiralmos/transit-tracker-lyon-firmware](https://github.com/tiralmos/transit-tracker-lyon-firmware). To use the component in your own ESPHome configuration, import it with `external_components`:
 
 ```yaml
 external_components:
   - source:
       type: git
-      url: https://github.com/tiralmos/esphome-bike-tracker
+      url: https://github.com/tiralmos/esphome-transit-tracker-lyon
       ref: main
-    components: [bike_tracker]
+    components: [transit_tracker]
 ```
 
-You will need a [display](https://esphome.io/components/display/) and a [font](https://esphome.io/components/font/). The configurator's "Generate YAML" button writes the `bike_tracker` block for you. All options:
+You will need a [display](https://esphome.io/components/display/), a [font](https://esphome.io/components/font/) and a [time source](https://esphome.io/components/time/) (for departure times). The configurator's "Generate YAML" button writes the `transit_tracker` block for you. All options:
 
 ```yaml
-bike_tracker:
+transit_tracker:
   id: tracker
 
-  # WebSocket URL of your Bike Tracker API
-  base_url: "ws://192.168.1.10:3000/"
+  # WebSocket URL of your Transit Tracker Lyon API
+  base_url: "ws://192.168.1.10:3001/"
 
   # Additional headers to send in the HTTP request
   headers:
@@ -38,28 +43,49 @@ bike_tracker:
   # Maximum number of rows on the display (header text takes one)
   limit: 3
 
-  # Scroll station names that don't fit next to the counts
-  scroll_station_names: true
+  # Show departure or arrival times
+  time_display: departure
 
-  # Stations to show, top to bottom
-  stations:
-    - station_id: "velov:1024"
+  # Units after the times: long ("5min"), short ("5m") or none ("5")
+  show_units: long
+
+  # Scroll names that don't fit
+  scroll_names: true
+
+  # Rows to show, top to bottom
+  rows:
+    # A transit line at a stop
+    - route_id: "tcl:C3"
+      stop_id: "tcl:1234"
+      # Optional: added to the times shown
+      time_offset: 1min
+      # Optional: shown instead of the destination
+      name: "Gare St-Paul"
+    # A bike-share station
     - station_id: "velov:7024"
-      # Shown instead of the station's own name
+      # Optional: shown instead of the station's own name
       name: "Home"
 
   # Add a static string to the top of the display
-  header_text: "Velo'v"
+  header_text: "Lyon"
 
-  # Shorten station names
+  # Shorten destinations and station names
   abbreviations:
     - from: "Part-Dieu"
       to: "P-Dieu"
 
-  # Icon colors (see https://esphome.io/components/display/#color)
-  docks_color: my_green
+  # Override a line's badge text and color
+  styles:
+    - route_id: "tcl:C3"
+      name: "C3"
+      color: my_red
+
+  # Colors (see https://esphome.io/components/display/#color)
+  default_route_color: my_green
+  realtime_color: my_green
+  docks_color: my_blue
   mechanical_color: my_red
-  electric_color: my_blue
+  electric_color: my_green
 ```
 
 Then, in your display's draw lambda:
@@ -68,8 +94,12 @@ Then, in your display's draw lambda:
 display:
   - platform: # ...
     lambda: |-
-      id(tracker).draw_stations();
+      id(tracker).draw_schedule();
 ```
+
+### Changing rows at runtime
+
+`set_rows_from_text()` takes one row per line, `t;routeId,stopId[,offsetSeconds]` or `b;stationId`, and reconnects to subscribe to the new rows. `set_row_names_from_text()` takes `rowId;name` lines, where `rowId` is `routeId,stopId` or the station ID. The firmware stores both as device settings that the configurator writes.
 
 ## License
 
