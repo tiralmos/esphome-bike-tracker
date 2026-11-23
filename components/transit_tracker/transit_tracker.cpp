@@ -65,16 +65,17 @@ static const char *const EBIKE_ICON[] = {
   nullptr,
 };
 
-// Shown on the left of each bike row, like the line badge of a transit row.
-// '#' is the badge color, '+' the letter.
+// The Vélo'v logo (a "V" with an arrow), shown on the left of each bike row
+// like the line badge of a transit row.
 static const char *const BIKE_BADGE_ICON[] = {
-  ".#######.",
-  "#+#####+#",
-  "#+#####+#",
-  "##+###+##",
-  "##+###+##",
-  "###+#+###",
-  ".###+###.",
+  ".....##.",
+  "....###.",
+  "##..####",
+  "###.##..",
+  ".##.##..",
+  ".#####..",
+  ".####...",
+  "..###...",
   nullptr,
 };
 

@@ -157,7 +157,7 @@ class TransitTracker : public Component {
     Color bolt_color_ = Color(0xFFD200);
     Color count_color_ = Color(0xFFFFFF);
     Color unavailable_color_ = Color(0x404040);
-    Color bike_badge_color_ = Color(0xE30613);
+    Color bike_badge_color_ = Color(0xE4022E);
 };
 
 }  // namespace transit_tracker
