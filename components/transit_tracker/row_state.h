@@ -28,6 +28,31 @@ class Row {
     int time_offset = 0;
 };
 
+// A set of rows shown during part of the day. The default slot (no times)
+// is shown whenever no other slot is active.
+class TimeSlot {
+  public:
+    bool is_default = true;
+    // Minutes since local midnight. A slot whose end is before its start
+    // crosses midnight; start == end means the whole day.
+    int start_minute = 0;
+    int end_minute = 0;
+    std::vector<Row> rows;
+
+    bool contains(int minute) const {
+      if (this->is_default) {
+        return false;
+      }
+      if (this->start_minute == this->end_minute) {
+        return true;
+      }
+      if (this->start_minute < this->end_minute) {
+        return minute >= this->start_minute && minute < this->end_minute;
+      }
+      return minute >= this->start_minute || minute < this->end_minute;
+    }
+};
+
 class Trip {
   public:
     std::string route_id;

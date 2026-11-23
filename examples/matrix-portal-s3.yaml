@@ -84,3 +84,12 @@ transit_tracker:
     # A Vélo'v station: shows free docks, bikes and e-bikes
     - station_id: "velov:7024"
       name: "Bancel"
+  # Rows shown only at some times of the day (local time, may cross
+  # midnight). Outside every slot, the rows above are shown.
+  time_slots:
+    - from: "07:00"
+      to: "09:00"
+      rows:
+        - route_id: "tcl:C3"
+          stop_id: "tcl:1234"
+        - station_id: "velov:7024"

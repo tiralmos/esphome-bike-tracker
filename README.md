@@ -66,6 +66,16 @@ transit_tracker:
       # Optional: shown instead of the station's own name
       name: "Home"
 
+  # Rows shown only between two times of the day (local time). A slot may
+  # cross midnight ("22:00" to "06:00"); slots must not overlap. Outside
+  # every slot the display shows `rows`, or stays dark if `rows` is empty.
+  time_slots:
+    - from: "07:00"
+      to: "09:00"
+      rows:
+        - route_id: "tcl:C3"
+          stop_id: "tcl:1234"
+
   # Add a static string to the top of the display
   header_text: "Lyon"
 
@@ -99,7 +109,7 @@ display:
 
 ### Changing rows at runtime
 
-`set_rows_from_text()` takes one row per line, `t;routeId,stopId[,offsetSeconds]` or `b;stationId`, and reconnects to subscribe to the new rows. `set_row_names_from_text()` takes `rowId;name` lines, where `rowId` is `routeId,stopId` or the station ID. The firmware stores both as device settings that the configurator writes.
+`set_rows_from_text()` takes one row per line, `t;routeId,stopId[,offsetSeconds]` or `b;stationId`, and reconnects to subscribe to the new rows. A line `s;HHMM-HHMM` starts a time slot: the rows after it are shown only between those times. Rows before the first slot line are the default ones. The component checks the time every second and resubscribes when another slot becomes active. `set_row_names_from_text()` takes `rowId;name` lines, where `rowId` is `routeId,stopId` or the station ID. The firmware stores both as device settings that the configurator writes.
 
 ## License
 
