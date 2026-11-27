@@ -111,6 +111,17 @@ display:
 
 `set_rows_from_text()` takes one row per line, `t;routeId,stopId[,offsetSeconds]` or `b;stationId`, and reconnects to subscribe to the new rows. A line `s;HHMM-HHMM` starts a time slot: the rows after it are shown only between those times. Rows before the first slot line are the default ones. The component checks the time every second and resubscribes when another slot becomes active. `set_row_names_from_text()` takes `rowId;name` lines, where `rowId` is `routeId,stopId` or the station ID. The firmware stores both as device settings that the configurator writes.
 
+### Alerts, weather and the Vélo'v logo color
+
+These extras are off by default and can be switched at runtime (each change reconnects to resubscribe):
+
+- `set_show_alerts(true)`: subscribes to `alerts:subscribe` for the transit rows' lines. A line with an active alert gets a `!` after its name, in the alert's color: red when the line does not run, yellow when it is disrupted, light blue for information. Every 45 seconds or so the alert replaces the destination and scrolls once, then the destination comes back.
+- `set_show_weather(true)`: subscribes to `weather:subscribe` and shows an icon and the temperature on the first bike row, between the station name and the bike counts.
+- `set_temperature_logo(true)`: the Vélo'v logo takes the color of the temperature: icy blue below 0 °C, blue up to 9 °C, green up to 19 °C, orange up to 27 °C, then red.
+- `set_weather_location_from_text("45.7578,4.8320")`: where the weather comes from (Lyon by default).
+
+The API needs a GTFS-RT service alerts feed (`rtServiceAlerts`) for alerts, and reaches Open-Meteo for the weather.
+
 ## License
 
 ```

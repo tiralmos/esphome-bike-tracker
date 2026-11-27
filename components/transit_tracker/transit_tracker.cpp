@@ -27,7 +27,9 @@ static constexpr unsigned long HEARTBEAT_TIMEOUT_MS = 60000;
 // They come sorted, and each transit row picks the next one of its line.
 static constexpr int SCHEDULE_LIMIT = 20;
 static constexpr int ICON_COUNT_GAP = 1;
-static constexpr int GROUP_GAP = 3;
+// Between the groups of a bike row, and between the groups and the name
+static constexpr int GROUP_GAP = 2;
+static constexpr int NAME_GAP = 3;
 
 static const Color MESSAGE_COLOR = Color(0x252627);
 
@@ -78,6 +80,64 @@ static const char *const BIKE_BADGE_ICON[] = {
   "..###...",
   nullptr,
 };
+
+// Weather icons, 7 pixels tall. y = sun, w = cloud, b = rain, s = snow,
+// z = lightning, g = fog, m = moon.
+static const char *const WEATHER_CLEAR_ICON[] = {
+  "y..y..y", ".yyyyy.", ".yyyyy.", "yyyyyyy", ".yyyyy.", ".yyyyy.", "y..y..y", nullptr,
+};
+static const char *const WEATHER_NIGHT_ICON[] = {
+  "..mmm..", ".mm....", "mm.....", "mm.....", "mm.....", ".mm....", "..mmm..", nullptr,
+};
+static const char *const WEATHER_PARTLY_ICON[] = {
+  "..y.y....", "...yyy...", "..yyywww.", "...ywwwww", "..wwwwwww", ".wwwwwwww", "..wwwwww.", nullptr,
+};
+static const char *const WEATHER_CLOUDY_ICON[] = {
+  "...www...", "..wwwww..", ".wwwwwww.", "wwwwwwwww", "wwwwwwwww", ".wwwwwww.", ".........", nullptr,
+};
+static const char *const WEATHER_RAIN_ICON[] = {
+  "...www...", "..wwwww..", ".wwwwwww.", "wwwwwwwww", ".wwwwwww.", ".b..b..b.", "b..b..b..", nullptr,
+};
+static const char *const WEATHER_SNOW_ICON[] = {
+  "...www...", "..wwwww..", ".wwwwwww.", "wwwwwwwww", ".wwwwwww.", "s...s...s", "..s...s..", nullptr,
+};
+static const char *const WEATHER_STORM_ICON[] = {
+  "...www...", "..wwwww..", ".wwwwwww.", "wwwwwwwww", ".wwwzwww.", "....z....", "...z.....", nullptr,
+};
+static const char *const WEATHER_FOG_ICON[] = {
+  "ggggggg..", ".........", "..ggggggg", ".........", "ggggggg..", ".........", "..ggggggg", nullptr,
+};
+static const char *const DEGREE_ICON[] = {".#.", "#.#", ".#.", nullptr};
+
+static Color weather_palette_color(char c) {
+  switch (c) {
+    case 'y': return Color(0xFFD200);
+    case 'w': return Color(0xC8C8C8);
+    case 'b': return Color(0x00A8FF);
+    case 's': return Color(0xFFFFFF);
+    case 'z': return Color(0xFFD200);
+    case 'g': return Color(0x8A8A8A);
+    case 'm': return Color(0xF0E68C);
+    default: return Color(0x000000);
+  }
+}
+
+// The color of a temperature, for the Vélo'v logo and the weather
+static Color temperature_color(int celsius) {
+  if (celsius < 0) return Color(0xB4E6FF);   // icy blue
+  if (celsius < 10) return Color(0x0090FF);  // blue
+  if (celsius < 20) return Color(0x2ECC40);  // green
+  if (celsius < 28) return Color(0xFF8C00);  // orange
+  return Color(0xE4022E);                    // Vélo'v red
+}
+
+static Color alert_color(AlertLevel level) {
+  switch (level) {
+    case AlertLevel::SEVERE: return Color(0xFF3B30);
+    case AlertLevel::WARNING: return Color(0xFFD200);
+    default: return Color(0x8FD8FF);
+  }
+}
 
 static const uint8_t REALTIME_ICON[6][6] = {
   {0, 0, 0, 3, 3, 3},
@@ -333,6 +393,42 @@ void TransitTracker::send_subscribe_() {
     }
   }
 
+  if (this->show_alerts_ && !route_stop_pairs.empty()) {
+    std::string route_ids;
+    for (const auto &row : this->rows_) {
+      if (row.type != RowType::TRANSIT ||
+          (";" + route_ids + ";").find(";" + row.route_id + ";") != std::string::npos) {
+        continue;
+      }
+      if (!route_ids.empty()) {
+        route_ids += ";";
+      }
+      route_ids += row.route_id;
+    }
+
+    auto message = json::build_json([&route_ids](JsonObject root) {
+      root["event"] = "alerts:subscribe";
+      root["data"].to<JsonObject>()["routeIds"] = route_ids;
+    });
+    ESP_LOGD(TAG, "Subscribing to alerts for %s", route_ids.c_str());
+    if (!this->ws_client_.send_text(message)) {
+      ESP_LOGW(TAG, "Alerts subscribe send failed");
+    }
+  }
+
+  if (this->wants_weather_() && !station_ids.empty()) {
+    auto message = json::build_json([this](JsonObject root) {
+      root["event"] = "weather:subscribe";
+      auto data = root["data"].to<JsonObject>();
+      data["latitude"] = this->weather_latitude_;
+      data["longitude"] = this->weather_longitude_;
+    });
+    ESP_LOGD(TAG, "Subscribing to weather at %.4f,%.4f", this->weather_latitude_, this->weather_longitude_);
+    if (!this->ws_client_.send_text(message)) {
+      ESP_LOGW(TAG, "Weather subscribe send failed");
+    }
+  }
+
   if (!station_ids.empty()) {
     auto message = json::build_json([this, &station_ids](JsonObject root) {
       root["event"] = "stations:subscribe";
@@ -433,6 +529,39 @@ void TransitTracker::handle_message_(const std::string &payload) {
       std::lock_guard<std::mutex> lock(this->state_.mutex);
       this->state_.stations = std::move(new_stations);
       this->state_.has_stations_update = true;
+      return true;
+    }
+
+    if (event == "alerts") {
+      ESP_LOGD(TAG, "Received alerts update (%u bytes)", static_cast<unsigned>(payload.size()));
+
+      std::vector<Alert> new_alerts;
+      for (auto item : root["data"]["alerts"].as<JsonArray>()) {
+        Alert alert;
+        for (auto route_id : item["routeIds"].as<JsonArray>()) {
+          alert.route_ids.push_back(route_id.as<std::string>());
+        }
+        auto level = item["level"].as<std::string>();
+        alert.level = level == "severe"    ? AlertLevel::SEVERE
+                      : level == "warning" ? AlertLevel::WARNING
+                                           : AlertLevel::INFO;
+        alert.text = item["text"].as<std::string>();
+        new_alerts.push_back(std::move(alert));
+      }
+
+      std::lock_guard<std::mutex> lock(this->state_.mutex);
+      this->state_.alerts = std::move(new_alerts);
+      return true;
+    }
+
+    if (event == "weather") {
+      auto data = root["data"].as<JsonObject>();
+      std::lock_guard<std::mutex> lock(this->state_.mutex);
+      this->state_.temperature = data["temperature"].as<int>();
+      this->state_.weather_kind = data["kind"].as<std::string>();
+      this->state_.is_day = data["isDay"] | true;
+      this->state_.has_weather = true;
+      ESP_LOGD(TAG, "Received weather: %s, %d degrees", this->state_.weather_kind.c_str(), this->state_.temperature);
       return true;
     }
 
@@ -645,6 +774,77 @@ void TransitTracker::set_realtime_color(const Color &color) {
   );
 }
 
+void TransitTracker::options_changed_(const char *reason) {
+  {
+    std::lock_guard<std::mutex> lock(this->state_.mutex);
+    this->state_.alerts.clear();
+    this->state_.has_weather = false;
+  }
+  // Like new rows, new subscriptions need a fresh connection
+  if (this->has_ever_connected_.load()) {
+    this->reconnect(reason);
+  }
+}
+
+void TransitTracker::set_show_alerts(bool show_alerts) {
+  if (show_alerts == this->show_alerts_) {
+    return;
+  }
+  this->show_alerts_ = show_alerts;
+  this->options_changed_("alerts option changed");
+}
+
+void TransitTracker::set_temperature_logo(bool temperature_logo) {
+  if (temperature_logo == this->temperature_logo_) {
+    return;
+  }
+  bool resubscribe = !this->wants_weather_();
+  this->temperature_logo_ = temperature_logo;
+  if (resubscribe || !this->wants_weather_()) {
+    this->options_changed_("logo color option changed");
+  }
+}
+
+void TransitTracker::set_show_weather(bool show_weather) {
+  if (show_weather == this->show_weather_) {
+    return;
+  }
+  bool resubscribe = !this->wants_weather_();
+  this->show_weather_ = show_weather;
+  if (resubscribe || !this->wants_weather_()) {
+    this->options_changed_("weather option changed");
+  }
+}
+
+void TransitTracker::set_weather_location_from_text(const std::string &text) {
+  auto parts = split(text, ',');
+  if (parts.size() != 2) {
+    if (!trim(text).empty()) {
+      ESP_LOGW(TAG, "Invalid weather location (expected latitude,longitude): %s", text.c_str());
+    }
+    return;
+  }
+  char *end_lat = nullptr;
+  char *end_lon = nullptr;
+  auto lat_text = trim(parts[0]);
+  auto lon_text = trim(parts[1]);
+  float latitude = strtof(lat_text.c_str(), &end_lat);
+  float longitude = strtof(lon_text.c_str(), &end_lon);
+  if (end_lat == lat_text.c_str() || end_lon == lon_text.c_str() || latitude < -90 || latitude > 90 ||
+      longitude < -180 || longitude > 180) {
+    ESP_LOGW(TAG, "Invalid weather location: %s", text.c_str());
+    return;
+  }
+  if (latitude == this->weather_latitude_ && longitude == this->weather_longitude_) {
+    return;
+  }
+  this->weather_latitude_ = latitude;
+  this->weather_longitude_ = longitude;
+  if (this->wants_weather_()) {
+    this->options_changed_("weather location changed");
+  }
+}
+
 std::string TransitTracker::abbreviate_(const std::string &text) const {
   std::string result = text;
   for (const auto &abbr : this->abbreviations_) {
@@ -694,9 +894,67 @@ void TransitTracker::draw_icon_(const char *const *rows, int left_x, int bottom_
 
 int TransitTracker::draw_bike_badge_(int left_x, int y_offset, bool available) {
   int bottom_y = y_offset + this->font_->get_ascender() - 1;
-  this->draw_icon_(BIKE_BADGE_ICON, left_x, bottom_y, available ? this->bike_badge_color_ : this->unavailable_color_,
+  this->draw_icon_(BIKE_BADGE_ICON, left_x, bottom_y, available ? this->logo_color_() : this->unavailable_color_,
                    Color(0xFFFFFF));
   return strlen(BIKE_BADGE_ICON[0]);
+}
+
+Color TransitTracker::logo_color_() const {
+  if (this->temperature_logo_ && this->state_.has_weather) {
+    return temperature_color(this->state_.temperature);
+  }
+  return this->bike_badge_color_;
+}
+
+void TransitTracker::draw_palette_icon_(const char *const *rows, int left_x, int bottom_y) {
+  int height = 0;
+  while (rows[height] != nullptr) {
+    height++;
+  }
+  for (int row = 0; row < height; row++) {
+    int y = bottom_y - (height - 1 - row);
+    for (int col = 0; rows[row][col] != '\0'; col++) {
+      if (rows[row][col] != '.') {
+        this->display_->draw_pixel_at(left_x + col, y, weather_palette_color(rows[row][col]));
+      }
+    }
+  }
+}
+
+int TransitTracker::draw_weather_(int left_x, int y_offset, bool no_draw) {
+  const auto &kind = this->state_.weather_kind;
+  const char *const *icon = WEATHER_CLOUDY_ICON;
+  if (kind == "clear") {
+    icon = this->state_.is_day ? WEATHER_CLEAR_ICON : WEATHER_NIGHT_ICON;
+  } else if (kind == "partly") {
+    icon = WEATHER_PARTLY_ICON;
+  } else if (kind == "fog") {
+    icon = WEATHER_FOG_ICON;
+  } else if (kind == "rain") {
+    icon = WEATHER_RAIN_ICON;
+  } else if (kind == "snow") {
+    icon = WEATHER_SNOW_ICON;
+  } else if (kind == "storm") {
+    icon = WEATHER_STORM_ICON;
+  }
+
+  auto temperature = to_string(this->state_.temperature);
+  int temperature_width, _;
+  this->font_->measure(temperature.c_str(), &temperature_width, &_, &_, &_);
+  int icon_width = strlen(icon[0]);
+  int degree_width = strlen(DEGREE_ICON[0]);
+  int width = icon_width + 1 + temperature_width + degree_width;
+
+  if (!no_draw) {
+    Color color = temperature_color(this->state_.temperature);
+    int bottom_y = y_offset + this->font_->get_ascender() - 1;
+    this->draw_palette_icon_(icon, left_x, bottom_y);
+    int x = left_x + icon_width + 1;
+    this->display_->print(x, y_offset, this->font_, color, display::TextAlign::TOP_LEFT, temperature.c_str());
+    // The font has no degree sign: a small circle at the top of the digits
+    this->draw_icon_(DEGREE_ICON, x + temperature_width, y_offset + 2, color, color);
+  }
+  return width;
 }
 
 void HOT TransitTracker::draw_realtime_icon_(int bottom_right_x, int bottom_right_y, unsigned long uptime) {
@@ -868,9 +1126,60 @@ int TransitTracker::draw_transit_row_(const Row &row, const Trip *trip, int y_of
     name_color = this->unavailable_color_;
   }
 
+  // Alerts for this line: a "!" in the color of the worst one, and now and
+  // then the alert itself in place of the name, scrolling once
+  std::vector<const Alert *> alerts;
+  if (this->show_alerts_) {
+    for (const auto &alert : this->state_.alerts) {
+      if (std::find(alert.route_ids.begin(), alert.route_ids.end(), row.route_id) != alert.route_ids.end()) {
+        alerts.push_back(&alert);
+      }
+    }
+  }
+
+  if (!alerts.empty()) {
+    if (!no_draw) {
+      this->display_->print(route_width + 2, y_offset, this->font_, alert_color(alerts[0]->level),
+                            display::TextAlign::TOP_LEFT, "!");
+    }
+    name_clipping_start = route_width + 5;
+  }
+
   int name_width;
   this->font_->measure(name.c_str(), &name_width, &_, &_, &_);
   int overflow = name_width - (name_clipping_end - name_clipping_start);
+
+  if (!alerts.empty()) {
+    int clip_width = name_clipping_end - name_clipping_start;
+    auto alert_duration = [this, clip_width](const Alert *alert) {
+      int width, _;
+      this->font_->measure(alert->text.c_str(), &width, &_, &_, &_);
+      int scroll = std::max(0, width - clip_width);
+      return 2 * alert_hold_time + scroll * 1000 / alert_scroll_speed;
+    };
+
+    int longest = 0;
+    for (const auto *alert : alerts) {
+      longest = std::max(longest, alert_duration(alert));
+    }
+    unsigned long period = std::max(alert_min_period, longest + alert_min_gap);
+    const Alert *alert = alerts[(uptime / period) % alerts.size()];
+    int t = uptime % period;
+
+    if (t < alert_duration(alert)) {
+      if (!no_draw) {
+        int width, _;
+        this->font_->measure(alert->text.c_str(), &width, &_, &_, &_);
+        int scroll = std::max(0, width - clip_width);
+        int offset = std::min(scroll, std::max(0, (t - alert_hold_time) * alert_scroll_speed / 1000));
+        this->display_->start_clipping(name_clipping_start, 0, name_clipping_end, this->display_->get_height());
+        this->display_->print(name_clipping_start - offset, y_offset, this->font_, alert_color(alert->level),
+                              display::TextAlign::TOP_LEFT, alert->text.c_str());
+        this->display_->end_clipping();
+      }
+      return overflow;
+    }
+  }
 
   if (!no_draw) {
     this->draw_scrolling_text_(name, name_color, name_clipping_start, name_clipping_end, y_offset, uptime,
@@ -880,7 +1189,7 @@ int TransitTracker::draw_transit_row_(const Row &row, const Trip *trip, int y_of
 }
 
 int TransitTracker::draw_bike_row_(const Row &row, const Station *station, int y_offset, unsigned long uptime,
-                                   bool no_draw, int scroll_cycle_duration) {
+                                   bool no_draw, int scroll_cycle_duration, bool with_weather) {
   struct Group {
     const char *const *icon;
     int count;
@@ -898,15 +1207,16 @@ int TransitTracker::draw_bike_row_(const Row &row, const Station *station, int y
     {DOCK_ICON, station ? station->docks_available : 0, this->docks_color_, is_returning},
   };
 
-  int count_width, _;
-  this->font_->measure("00", &count_width, &_, &_, &_);
+  int _;
   int icon_bottom_y = y_offset + this->font_->get_ascender() - 1;
 
-  // Each group is an icon followed by its count, in a fixed-width column
-  // so that the groups line up from one row to the next.
+  // Each group is an icon followed by its count. A count column is as wide
+  // as the widest number in it on screen, so the groups line up from one
+  // row to the next without keeping room for numbers that aren't there.
   int x = this->display_->get_width();
-  for (const auto &group : groups) {
-    x -= count_width;
+  for (size_t i = 0; i < 3; i++) {
+    const auto &group = groups[i];
+    x -= this->count_widths_[i];
     if (!no_draw) {
       auto count = station ? to_string(group.count) : std::string("-");
       Color count_color = group.available && group.count > 0 ? this->count_color_ : this->unavailable_color_;
@@ -919,7 +1229,13 @@ int TransitTracker::draw_bike_row_(const Row &row, const Station *station, int y
       Color accent_color = group.available ? this->bolt_color_ : this->unavailable_color_;
       this->draw_icon_(group.icon, x, icon_bottom_y, icon_color, accent_color);
     }
-    x -= GROUP_GAP;
+    x -= i < 2 ? GROUP_GAP : NAME_GAP;
+  }
+
+  if (with_weather) {
+    x -= this->draw_weather_(0, y_offset, true);
+    this->draw_weather_(x, y_offset, no_draw);
+    x -= NAME_GAP;
   }
 
   const std::string *custom_name = this->custom_name_(row.id);
@@ -959,7 +1275,41 @@ int TransitTracker::draw_row_(int index, int y_offset, int font_height, unsigned
 
   auto it = this->state_.stations.find(row.id);
   const Station *station = it == this->state_.stations.end() ? nullptr : &it->second;
-  return this->draw_bike_row_(row, station, y_offset, uptime, no_draw, scroll_cycle_duration);
+  return this->draw_bike_row_(row, station, y_offset, uptime, no_draw, scroll_cycle_duration,
+                              index == this->weather_row_);
+}
+
+void TransitTracker::update_count_widths_(int row_count) {
+  int zero_width, _;
+  this->font_->measure("0", &zero_width, &_, &_, &_);
+  for (int &width : this->count_widths_) {
+    width = zero_width;
+  }
+
+  this->weather_row_ = -1;
+  for (int i = 0; i < row_count; i++) {
+    const auto &row = this->rows_[i];
+    if (row.type != RowType::BIKE) {
+      continue;
+    }
+    if (this->weather_row_ < 0 && this->show_weather_ && this->state_.has_weather) {
+      this->weather_row_ = i;
+    }
+
+    auto it = this->state_.stations.find(row.id);
+    const Station *station = it == this->state_.stations.end() ? nullptr : &it->second;
+    const int counts[3] = {
+      station ? station->electric_available : 0,
+      station ? station->mechanical_available : 0,
+      station ? station->docks_available : 0,
+    };
+    for (int g = 0; g < 3; g++) {
+      auto text = station ? to_string(counts[g]) : std::string("-");
+      int width;
+      this->font_->measure(text.c_str(), &width, &_, &_, &_);
+      this->count_widths_[g] = std::max(this->count_widths_[g], width);
+    }
+  }
 }
 
 void HOT TransitTracker::draw_schedule() {
@@ -1027,6 +1377,7 @@ void HOT TransitTracker::draw_schedule() {
   bool has_header_text = !this->header_text_.empty();
   int max_rows = has_header_text ? this->limit_ - 1 : this->limit_;
   int row_count = std::min<int>(max_rows, this->rows_.size());
+  this->update_count_widths_(row_count);
 
   // All names scroll in step, so the cycle lasts as long as the longest one needs
   int scroll_cycle_duration = 0;

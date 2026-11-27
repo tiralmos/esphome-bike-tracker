@@ -76,6 +76,21 @@ class Station {
     bool is_returning;
 };
 
+// How bad a disruption is; it picks the color of the alert
+enum class AlertLevel : uint8_t {
+  SEVERE,   // the line does not run (red)
+  WARNING,  // the line runs, but not as usual (yellow)
+  INFO,     // works announced, other information (light blue)
+};
+
+class Alert {
+  public:
+    std::vector<std::string> route_ids;
+    AlertLevel level;
+    // One short line: the alert's title and first sentence
+    std::string text;
+};
+
 class TrackerState {
   public:
     std::mutex mutex;
@@ -84,6 +99,15 @@ class TrackerState {
     std::map<std::string, Station> stations;
     bool has_schedule_update = false;
     bool has_stations_update = false;
+
+    // Active alerts for the transit rows' lines, most severe first
+    std::vector<Alert> alerts;
+
+    bool has_weather = false;
+    int temperature = 0;
+    // "clear", "partly", "cloudy", "fog", "rain", "snow" or "storm"
+    std::string weather_kind;
+    bool is_day = true;
 };
 
 }  // namespace transit_tracker

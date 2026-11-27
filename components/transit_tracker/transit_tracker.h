@@ -79,15 +79,35 @@ class TransitTracker : public Component {
     void set_mechanical_color(const Color &color) { mechanical_color_ = color; }
     void set_electric_color(const Color &color) { electric_color_ = color; }
 
+    // Optional extras. Each change resubscribes when connected.
+    // Disruption alerts on transit rows (from the API's alerts:subscribe)
+    void set_show_alerts(bool show_alerts);
+    // The Vélo'v logo takes the color of the outdoor temperature
+    void set_temperature_logo(bool temperature_logo);
+    // Weather icon and temperature on the first bike row
+    void set_show_weather(bool show_weather);
+    // "latitude,longitude" of the place whose weather to show
+    void set_weather_location_from_text(const std::string &text);
+
   protected:
     static constexpr int scroll_speed = 10; // pixels/second
     static constexpr int idle_time_left = 5000;
     static constexpr int idle_time_right = 1000;
 
+    // Alerts: shown in place of the destination now and then, scrolling once
+    static constexpr int alert_scroll_speed = 20; // pixels/second
+    static constexpr int alert_hold_time = 1500;
+    static constexpr int alert_min_period = 45000;
+    static constexpr int alert_min_gap = 15000;
+
     void draw_text_centered_(const char *text, Color color);
     void draw_icon_(const char *const *rows, int left_x, int bottom_y, Color color, Color accent_color);
     int draw_bike_badge_(int left_x, int y_offset, bool available);
     void draw_realtime_icon_(int bottom_right_x, int bottom_right_y, unsigned long uptime);
+    void draw_palette_icon_(const char *const *rows, int left_x, int bottom_y);
+    // Draws the weather from left_x and returns its width; with no_draw, only measures
+    int draw_weather_(int left_x, int y_offset, bool no_draw);
+    Color logo_color_() const;
     void draw_scrolling_text_(const std::string &text, Color color, int clip_start, int clip_end, int y_offset,
                               unsigned long uptime, int scroll_cycle_duration);
 
@@ -95,13 +115,17 @@ class TransitTracker : public Component {
     const std::string *custom_name_(const std::string &row_id) const;
     bool has_transit_rows_() const;
     bool has_bike_rows_() const;
+    bool wants_weather_() const { return this->show_weather_ || this->temperature_logo_; }
+    void options_changed_(const char *reason);
+    // Number column widths for the bike rows on screen (e-bikes, bikes, docks)
+    void update_count_widths_(int row_count);
 
     // Each returns how many pixels its name is too wide for (<= 0 if it fits).
     // With no_draw, only measures.
     int draw_transit_row_(const Row &row, const Trip *trip, int y_offset, int font_height, unsigned long uptime,
                           uint rtc_now, bool no_draw, int scroll_cycle_duration);
     int draw_bike_row_(const Row &row, const Station *station, int y_offset, unsigned long uptime, bool no_draw,
-                       int scroll_cycle_duration);
+                       int scroll_cycle_duration, bool with_weather);
     int draw_row_(int index, int y_offset, int font_height, unsigned long uptime, uint rtc_now, bool no_draw,
                   int scroll_cycle_duration);
     const Trip *trip_for_row_(int index, uint rtc_now) const;
@@ -158,6 +182,17 @@ class TransitTracker : public Component {
     Color count_color_ = Color(0xFFFFFF);
     Color unavailable_color_ = Color(0x404040);
     Color bike_badge_color_ = Color(0xE4022E);
+
+    bool show_alerts_ = false;
+    bool temperature_logo_ = false;
+    bool show_weather_ = false;
+    // Lyon until set
+    float weather_latitude_ = 45.7578f;
+    float weather_longitude_ = 4.8320f;
+
+    // Set by draw_schedule for the rows it draws
+    int count_widths_[3] = {0, 0, 0};
+    int weather_row_ = -1;
 };
 
 }  // namespace transit_tracker
